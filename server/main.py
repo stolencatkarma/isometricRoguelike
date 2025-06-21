@@ -2,17 +2,17 @@ import sys
 import os
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
-# Entry point for the Python server
-# Uses websockets for multiplayer
 import asyncio
-import websockets
-import uuid
-import json
-import time
+from core.network import start_server
+from core.party import get_party_id
+from core.classes import CLASSES, CLASS_MAIN_STAT
 from shared.map import GameMap
 from shared.maps_campaign import get_campaign_map, SUBTILES_PER_TILE, is_walkable_subtile
 from shared.maps_city import get_city_map
 from shared.maps_endgame import generate_endgame_map
+import json
+import uuid
+import time
 
 connected_clients = {}
 player_states = {}
@@ -30,17 +30,6 @@ emotes = {}
 # Add player HP tracking (for future use)
 player_hp = {}
 player_max_hp = {}
-
-# Class definitions
-CLASSES = {
-    "Brute": {"Strength": 10, "Agility": 5, "Mind": 3},
-    "Scout": {"Strength": 4, "Agility": 10, "Mind": 4},
-    "Savant": {"Strength": 3, "Agility": 5, "Mind": 10},
-    "Vanguard": {"Strength": 7, "Agility": 7, "Mind": 7},  # Balanced
-}
-
-# Player info: {client_id: {"class": str, "stats": {"Strength": int, "Agility": int, "Mind": int}}}
-player_info = {}
 
 def get_party_id(act, zone, endgame_depth=None):
     if act > 3:
@@ -421,7 +410,7 @@ async def handler(websocket, path):
 
 async def main():
     print("Server starting on ws://localhost:8765 ...")
-    async with websockets.serve(handler, "localhost", 8765):
+    async with start_server(handler):
         await asyncio.Future()  # run forever
 
 if __name__ == "__main__":
