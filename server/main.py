@@ -6,7 +6,8 @@ import uuid
 import json
 import time
 from shared.map import GameMap
-from shared.maps_campaign import get_campaign_map
+from shared.maps_campaign import get_campaign_map, SUBTILES_PER_TILE, is_walkable_subtile
+from shared.maps_city import get_city_map
 
 connected_clients = {}
 player_states = {}
@@ -16,8 +17,14 @@ player_progress = {}
 parties = {}
 # Player XP/level: {client_id: {"level": int, "xp": int}}
 player_xp = {}
-# Monster system: {party_id: [ {"id": str, "pos": [x, y], "type": str, ...}, ... ]}
+# Monster system: {party_id: [ {"id": str, "pos": [x, y], "type": str, "hp": int, ...}, ... ]}
 monsters = {}
+# Player emotes: {client_id: {"type": str, "until": float}}
+emotes = {}
+
+# Add player HP tracking (for future use)
+player_hp = {}
+player_max_hp = {}
 
 # Class definitions
 CLASSES = {
@@ -54,6 +61,14 @@ CLASS_MAIN_STAT = {
     "Scout": "Agility",
     "Savant": "Mind",
     "Vanguard": None  # Balanced
+}
+
+# Player city state: {client_id: bool}
+player_in_city = {}
+# City instance (shared for all)
+CITY_INSTANCE = {
+    "map": get_city_map(),
+    "members": set()
 }
 
 async def handler(websocket, path):
@@ -101,15 +116,16 @@ async def handler(websocket, path):
             monsters[party_id].append({
                 "id": str(uuid.uuid4()),
                 "pos": [mx, my],
-                "type": random.choice(["goblin", "skeleton", "slime"])
+                "type": random.choice(["goblin", "skeleton", "slime"]),
+                "hp": 10
             })
     parties[party_id]["members"].add(client_id)
-    # Find a random floor tile for spawn
+    # Find a random floor subtile for spawn
     game_map = parties[party_id]["map"]
     for y in range(game_map.height):
         for x in range(game_map.width):
             if game_map.grid[y][x] == 0:
-                player_states[client_id] = {"pos": [x, y]}
+                player_states[client_id] = {"pos": [x, y, 1, 1]}  # center subtile
                 break
         if client_id in player_states:
             break
@@ -139,48 +155,66 @@ async def handler(websocket, path):
                     if chosen in CLASSES:
                         player_info[client_id]["class"] = chosen
                         player_info[client_id]["stats"] = dict(CLASSES[chosen])
-                # Handle move requests
+                # Handle move requests (city or campaign)
                 if data.get("type") == "move":
+                    pos = player_states[client_id]["pos"]
                     dx = data["payload"].get("dx", 0)
                     dy = data["payload"].get("dy", 0)
-                    pos = player_states[client_id]["pos"]
-                    new_x = max(0, min(game_map.width-1, pos[0] + dx))
-                    new_y = max(0, min(game_map.height-1, pos[1] + dy))
-                    # Only move if walkable
-                    if game_map.is_walkable(new_x, new_y):
-                        player_states[client_id]["pos"] = [new_x, new_y]
-                        # Check for exit
-                        if game_map.is_exit(new_x, new_y):
-                            print(f"Player {client_id} reached an exit!")
-                            # Award XP for zone completion
-                            player_xp[client_id]["xp"] += XP_PER_ZONE
-                            # Level up if enough XP
-                            while player_xp[client_id]["xp"] >= XP_PER_LEVEL:
-                                player_xp[client_id]["xp"] -= XP_PER_LEVEL
-                                player_xp[client_id]["level"] += 1
-                                # Stat gain on level up
-                                class_name = player_info[client_id]["class"]
-                                main_stat = CLASS_MAIN_STAT[class_name]
-                                for stat in ["Strength", "Agility", "Mind"]:
-                                    if class_name == "Vanguard":
-                                        player_info[client_id]["stats"][stat] += 1 if player_xp[client_id]["level"] % 3 == 0 else 0
-                                    elif stat == main_stat:
-                                        player_info[client_id]["stats"][stat] += 1 if player_xp[client_id]["level"] % 2 == 0 else 0
-                                    else:
-                                        player_info[client_id]["stats"][stat] += 1 if player_xp[client_id]["level"] % 4 == 0 else 0
-                            # Progress to next zone or act
-                            if zone < 10:
-                                player_progress[client_id]["zone"] += 1
-                            else:
-                                player_progress[client_id]["act"] += 1
-                                player_progress[client_id]["zone"] = 1
-                            # TODO: move party to next instance, respawn all
+                    dsx = data["payload"].get("dsx", 0)
+                    dsy = data["payload"].get("dsy", 0)
+                    if player_in_city[client_id]:
+                        city_map = CITY_INSTANCE["map"]
+                        new_x = max(0, min(city_map["width"]-1, pos[0] + dx))
+                        new_y = max(0, min(city_map["height"]-1, pos[1] + dy))
+                        new_sx = max(0, min(SUBTILES_PER_TILE-1, pos[2] + dsx))
+                        new_sy = max(0, min(SUBTILES_PER_TILE-1, pos[3] + dsy))
+                        if city_map["grid"][new_y][new_x] != 1 and is_walkable_subtile(city_map["grid"], new_x, new_y, new_sx, new_sy):
+                            player_states[client_id]["pos"] = [new_x, new_y, new_sx, new_sy]
+                    else:
+                        game_map = parties[party_id]["map"]
+                        new_x = max(0, min(game_map.width-1, pos[0] + dx))
+                        new_y = max(0, min(game_map.height-1, pos[1] + dy))
+                        new_sx = max(0, min(SUBTILES_PER_TILE-1, pos[2] + dsx))
+                        new_sy = max(0, min(SUBTILES_PER_TILE-1, pos[3] + dsy))
+                        if game_map.is_walkable(new_x, new_y) and is_walkable_subtile(game_map.grid, new_x, new_y, new_sx, new_sy):
+                            player_states[client_id]["pos"] = [new_x, new_y, new_sx, new_sy]
+                            # Check for exit
+                            if game_map.is_exit(new_x, new_y):
+                                print(f"Player {client_id} reached an exit!")
+                                # Award XP for zone completion
+                                player_xp[client_id]["xp"] += XP_PER_ZONE
+                                # Level up if enough XP
+                                while player_xp[client_id]["xp"] >= XP_PER_LEVEL:
+                                    player_xp[client_id]["xp"] -= XP_PER_LEVEL
+                                    player_xp[client_id]["level"] += 1
+                                    # Stat gain on level up
+                                    class_name = player_info[client_id]["class"]
+                                    main_stat = CLASS_MAIN_STAT[class_name]
+                                    for stat in ["Strength", "Agility", "Mind"]:
+                                        if class_name == "Vanguard":
+                                            player_info[client_id]["stats"][stat] += 1 if player_xp[client_id]["level"] % 3 == 0 else 0
+                                        elif stat == main_stat:
+                                            player_info[client_id]["stats"][stat] += 1 if player_xp[client_id]["level"] % 2 == 0 else 0
+                                        else:
+                                            player_info[client_id]["stats"][stat] += 1 if player_xp[client_id]["level"] % 4 == 0 else 0
+                                # Progress to next zone or act
+                                if zone < 10:
+                                    player_progress[client_id]["zone"] += 1
+                                else:
+                                    player_progress[client_id]["act"] += 1
+                                    player_progress[client_id]["zone"] = 1
+                                # TODO: move party to next instance, respawn all
                     # Compute visible monsters for this player
                     def is_visible(monster_pos, player_pos, radius=5):
                         dx = monster_pos[0] - player_pos[0]
                         dy = monster_pos[1] - player_pos[1]
                         return dx*dx + dy*dy <= radius*radius
-                    visible_monsters = [m for m in monsters.get(party_id, []) if is_visible(m["pos"], player_states[client_id]["pos"])]
+                    visible_monsters = [m for m in monsters.get(party_id, []) if is_visible(m["pos"], player_states[client_id]["pos"][:2])]
+                    party_positions = [
+                        {"id": pid, "pos": player_states[pid]["pos"]}
+                        for pid in parties[party_id]["members"]
+                        if pid in player_states and pid != client_id
+                    ]
                     # Send updated state to this client
                     state_msg = json.dumps({
                         "type": "state",
@@ -192,10 +226,13 @@ async def handler(websocket, path):
                                 "level": player_xp[client_id]["level"],
                                 "xp": player_xp[client_id]["xp"],
                                 "class": player_info[client_id]["class"],
-                                "stats": player_info[client_id]["stats"]
+                                "stats": player_info[client_id]["stats"],
+                                "hp": player_hp[client_id],
+                                "max_hp": player_max_hp[client_id]
                             },
                             "map": None,
-                            "monsters": visible_monsters
+                            "monsters": visible_monsters,
+                            "party_positions": party_positions
                         }
                     })
                     await websocket.send(state_msg)
@@ -237,7 +274,7 @@ async def handler(websocket, path):
                         for y in range(game_map.height):
                             for x in range(game_map.width):
                                 if game_map.grid[y][x] == 0:
-                                    player_states[joiner] = {"pos": [x, y]}
+                                    player_states[joiner] = {"pos": [x, y, 1, 1]}  # center subtile
                                     break
                             if joiner in player_states:
                                 break
@@ -296,6 +333,20 @@ async def handler(websocket, path):
                                 for other_id in parties[party_id]["members"]:
                                     if other_id in connected_clients:
                                         await connected_clients[other_id].send(kick_msg)
+                # Handle emote action
+                if data.get("type") == "emote":
+                    emote_type = data["payload"].get("emote")
+                    duration = 2.0  # seconds
+                    emotes[client_id] = {"type": emote_type, "until": time.time() + duration}
+                    # Broadcast to party
+                    emote_msg = json.dumps({
+                        "type": "emote",
+                        "sender": client_id,
+                        "payload": {"emote": emote_type, "duration": duration}
+                    })
+                    for other_id in parties[party_id]["members"]:
+                        if other_id in connected_clients:
+                            await connected_clients[other_id].send(emote_msg)
                 # Relay chat/join messages only to players in the same party
                 relay_types = {"chat", "join"}
                 if data.get("type") in relay_types:
@@ -303,6 +354,30 @@ async def handler(websocket, path):
                         if other_id != client_id and other_id in connected_clients:
                             relay_msg = json.dumps(data)
                             await connected_clients[other_id].send(relay_msg)
+                # Handle attack requests
+                if data.get("type") == "attack":
+                    target_id = data["payload"].get("target_id")
+                    # Find monster in party
+                    for m in monsters.get(party_id, []):
+                        if m["id"] == target_id:
+                            # Check if in range (1 tile for now)
+                            px, py, psx, psy = player_states[client_id]["pos"]
+                            mx, my = m["pos"]
+                            if abs(mx - px) <= 1 and abs(my - py) <= 1:
+                                dmg = 3  # Example: flat damage
+                                m["hp"] -= dmg
+                                # Send damage message to all party members
+                                dmg_msg = json.dumps({
+                                    "type": "damage",
+                                    "payload": {"target_id": m["id"], "amount": dmg, "pos": [mx, my, 1, 1]}
+                                })
+                                for pid in parties[party_id]["members"]:
+                                    if pid in connected_clients:
+                                        await connected_clients[pid].send(dmg_msg)
+                                # If monster dies, remove it
+                                if m["hp"] <= 0:
+                                    monsters[party_id].remove(m)
+                            break
             except json.JSONDecodeError:
                 print(f"Invalid JSON from {client_id}: {message}")
     except websockets.ConnectionClosed:
