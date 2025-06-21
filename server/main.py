@@ -11,4 +11,8 @@ async def main():
     await start_server(state)
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("[SERVER] Shutting down gracefully.")
+        sys.exit(0)

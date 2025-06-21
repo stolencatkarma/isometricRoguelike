@@ -2,6 +2,7 @@ import pygame
 from .render import draw_isometric_grid, draw_player
 
 def draw_game(screen, state, assets):
+    # print(f"[DEBUG] draw_game: map_grid={bool(state.get('map_grid'))}, map_height={state.get('map_height')}, map_width={state.get('map_width')}, player_pos={state.get('player_pos')}, player_class={state.get('player_class')}", flush=True)
     draw_isometric_grid(
         screen,
         state['map_grid'],
@@ -13,6 +14,22 @@ def draw_game(screen, state, assets):
         assets['TILE_HEIGHT'],
         state['zoom']
     )
+    # Draw all players (multiplayer)
+    player_id = state.get('player_id')
+    # Draw other players first
+    for pid, pdata in state.get('other_players', {}).items():
+        if pid != player_id:
+            draw_player(
+                screen,
+                pdata['pos'],
+                pdata.get('class', 'Brute'),
+                assets['SPRITE_PALETTE'],
+                assets['SPRITE_CHARACTERS'],
+                assets['TILE_WIDTH'],
+                assets['TILE_HEIGHT'],
+                state['zoom']
+            )
+    # Draw local player on top
     draw_player(
         screen,
         state['player_pos'],

@@ -11,6 +11,36 @@ from core.game import draw_game, draw_main_menu, draw_character_select
 from core.input import handle_input, handle_main_menu_input, handle_character_select_input
 from core.update import update_game
 
+async def game_loop(state, assets, send_queue, recv_queue):
+    import pygame
+    screen = pygame.display.set_mode((800, 600))
+    pygame.display.set_caption("Isometric Roguelike Client")
+    clock = pygame.time.Clock()
+    running = True
+    while running:
+        for event in pygame.event.get():
+            if state['scene'] == 'main_menu':
+                running = handle_main_menu_input(event, state)
+            elif state['scene'] == 'character_select':
+                running = handle_character_select_input(event, state, send_queue)
+            elif state['scene'] == 'game':
+                running = handle_input(event, state, send_queue)
+            if not running:
+                break
+        if state['scene'] == 'main_menu':
+            draw_main_menu(screen)
+        elif state['scene'] == 'character_select':
+            draw_character_select(screen, state.get('selected_class'))
+        elif state['scene'] == 'game':
+            update_game(state, send_queue)
+            screen.fill((30, 30, 30))
+            draw_game(screen, state, assets)
+        pygame.display.flip()
+        clock.tick(30)
+        await asyncio.sleep(0)  # Yield to event loop for network
+    pygame.quit()
+    sys.exit()
+
 async def main():
     # --- State and asset setup ---
     state = {
@@ -37,39 +67,18 @@ async def main():
     assets['SPRITE_CHARACTERS'] = chars
     assets['SPRITE_MONSTERS'] = monsters
     assets['SPRITE_BOSS'] = boss
-    screen = pygame.display.set_mode((800, 600))
-    pygame.display.set_caption("Isometric Roguelike Client")
-    clock = pygame.time.Clock()
     send_queue = asyncio.Queue()
     recv_queue = asyncio.Queue()
     uri = "ws://localhost:8765"
 
     # Start networking in background
-    asyncio.create_task(network_loop(uri, send_queue, recv_queue, state))
-
-    running = True
-    while running:
-        for event in pygame.event.get():
-            if state['scene'] == 'main_menu':
-                running = handle_main_menu_input(event, state)
-            elif state['scene'] == 'character_select':
-                running = handle_character_select_input(event, state, send_queue)
-            elif state['scene'] == 'game':
-                running = handle_input(event, state, send_queue)
-            if not running:
-                break
-        if state['scene'] == 'main_menu':
-            draw_main_menu(screen)
-        elif state['scene'] == 'character_select':
-            draw_character_select(screen, state.get('selected_class'))
-        elif state['scene'] == 'game':
-            update_game(state, send_queue)
-            screen.fill((30, 30, 30))
-            draw_game(screen, state, assets)
-        pygame.display.flip()
-        clock.tick(30)
-    pygame.quit()
-    sys.exit()
+    network_task = asyncio.create_task(network_loop(uri, send_queue, recv_queue, state))
+    await game_loop(state, assets, send_queue, recv_queue)
+    await network_task
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("[CLIENT] Shutting down gracefully.")
+        sys.exit(0)
