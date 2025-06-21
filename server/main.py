@@ -8,6 +8,7 @@ import time
 from shared.map import GameMap
 from shared.maps_campaign import get_campaign_map, SUBTILES_PER_TILE, is_walkable_subtile
 from shared.maps_city import get_city_map
+from shared.maps_endgame import generate_endgame_map
 
 connected_clients = {}
 player_states = {}
@@ -37,7 +38,9 @@ CLASSES = {
 # Player info: {client_id: {"class": str, "stats": {"Strength": int, "Agility": int, "Mind": int}}}
 player_info = {}
 
-def get_party_id(act, zone):
+def get_party_id(act, zone, endgame_depth=None):
+    if act > 3:
+        return f"endgame_{endgame_depth or 1}"
     return f"act{act}_zone{zone}"
 
 # Load campaign map for chapter 1 (index 0)
@@ -76,7 +79,7 @@ async def handler(websocket, path):
     client_id = str(uuid.uuid4())
     connected_clients[client_id] = websocket
     # For demo: start all new players at act 1, zone 1
-    player_progress[client_id] = {"act": 1, "zone": 1}
+    player_progress[client_id] = {"act": 1, "zone": 1, "endgame_depth": None}
     player_xp[client_id] = {"level": 1, "xp": 0}
     # For demo: assign class randomly (replace with client selection later)
     import random
@@ -84,30 +87,40 @@ async def handler(websocket, path):
     player_info[client_id] = {"class": class_name, "stats": dict(CLASSES[class_name])}
     act = player_progress[client_id]["act"]
     zone = player_progress[client_id]["zone"]
-    party_id = get_party_id(act, zone)
+    endgame_depth = player_progress[client_id].get("endgame_depth")
+    party_id = get_party_id(act, zone, endgame_depth)
     # Create or join party instance
     if party_id not in parties:
-        map_data = get_campaign_map(act, zone)
-        if map_data:
+        if act > 3:
+            # Endgame: generate procedural map
+            depth = endgame_depth or 1
+            map_data = generate_endgame_map(depth=depth)
+            from shared.map import GameMap
             game_map = GameMap(map_data["width"], map_data["height"])
             game_map.grid = map_data["grid"]
         else:
-            game_map = GameMap(20, 20)
-            map_data = game_map.to_dict()
+            map_data = get_campaign_map(act, zone)
+            if map_data:
+                game_map = GameMap(map_data["width"], map_data["height"])
+                game_map.grid = map_data["grid"]
+            else:
+                game_map = GameMap(20, 20)
+                map_data = game_map.to_dict()
         parties[party_id] = {
             "act": act,
             "zone": zone,
+            "endgame_depth": endgame_depth,
             "members": set(),
             "map": game_map,
             "map_data": map_data,
             "created": time.time(),
             "invites": set(),
-            "kick_votes": {}  # {target_id: {voter_id: timestamp}}
+            "kick_votes": {}
         }
         # Spawn monsters for this party instance
         import random
         monsters[party_id] = []
-        for i in range(10):  # Example: 10 monsters per map
+        for i in range(10):
             while True:
                 mx = random.randint(0, game_map.width-1)
                 my = random.randint(0, game_map.height-1)
@@ -198,11 +211,17 @@ async def handler(websocket, path):
                                         else:
                                             player_info[client_id]["stats"][stat] += 1 if player_xp[client_id]["level"] % 4 == 0 else 0
                                 # Progress to next zone or act
-                                if zone < 10:
-                                    player_progress[client_id]["zone"] += 1
+                                if act <= 3:
+                                    if zone < 10:
+                                        player_progress[client_id]["zone"] += 1
+                                    else:
+                                        player_progress[client_id]["act"] += 1
+                                        player_progress[client_id]["zone"] = 1
                                 else:
-                                    player_progress[client_id]["act"] += 1
-                                    player_progress[client_id]["zone"] = 1
+                                    # Endgame: go deeper
+                                    if not player_progress[client_id]["endgame_depth"]:
+                                        player_progress[client_id]["endgame_depth"] = 1
+                                    player_progress[client_id]["endgame_depth"] += 1
                                 # TODO: move party to next instance, respawn all
                     # Compute visible monsters for this player
                     def is_visible(monster_pos, player_pos, radius=5):

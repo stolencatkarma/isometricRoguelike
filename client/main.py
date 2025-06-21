@@ -8,6 +8,7 @@ import sys
 import threading
 import math
 import heapq
+import os
 from shared.maps_campaign import SUBTILES_PER_TILE, is_walkable_subtile
 
 # Isometric tile settings
@@ -83,6 +84,52 @@ CITY_UI_COLOR = (0, 200, 255)
 
 # Floating damage numbers: list of dicts {"pos": (x, y, sx, sy), "value": int, "timer": float, "dx": float}
 floating_damage = []
+
+SPRITE_SIZE = 8  # 8x8 pixel sprites
+SPRITE_SCALE = 4  # Scale up for display
+SPRITE_PATH = os.path.join(os.path.dirname(__file__), '../assets/sprites_palette.json')
+
+# Sprite data globals
+SPRITE_PALETTE = None
+SPRITE_TILES = None
+SPRITE_CHARACTERS = None
+SPRITE_MONSTERS = None
+SPRITE_BOSS = None
+
+def load_sprites():
+    global SPRITE_PALETTE, SPRITE_TILES, SPRITE_CHARACTERS, SPRITE_MONSTERS, SPRITE_BOSS
+    with open(SPRITE_PATH, 'r') as f:
+        data = json.load(f)
+    SPRITE_PALETTE = [
+        data["palette"]["floor"],
+        data["palette"]["wall"],
+        data["palette"]["exit"],
+        data["palette"]["waypoint"],
+        data["palette"]["event"],
+        data["palette"]["boss"],
+        data["palette"]["player_brute"],
+        data["palette"]["player_scout"],
+        data["palette"]["player_savant"],
+        data["palette"]["player_vanguard"],
+        data["palette"]["monster_goblin"],
+        data["palette"]["monster_skeleton"],
+        data["palette"]["monster_slime"],
+        data["palette"]["boss_final"]
+    ]
+    SPRITE_TILES = data["tiles"]
+    SPRITE_CHARACTERS = data["characters"]
+    SPRITE_MONSTERS = data["monsters"]
+    SPRITE_BOSS = data["boss"]
+
+def draw_sprite(screen, sprite, palette, x, y, scale=SPRITE_SCALE):
+    for row in range(len(sprite)):
+        for col in range(len(sprite[row])):
+            color_idx = sprite[row][col]
+            if color_idx == 0:
+                continue  # transparent
+            color = palette[color_idx]
+            rect = pygame.Rect(x + col*scale, y + row*scale, scale, scale)
+            pygame.draw.rect(screen, color, rect)
 
 async def network_loop(uri, send_queue, recv_queue):
     global map_data, map_grid, map_width, map_height, player_class, player_stats, player_level, player_xp, player_id, party_members, party_invites, party_id, in_city
@@ -175,22 +222,27 @@ async def network_loop(uri, send_queue, recv_queue):
         await asyncio.gather(sender(), receiver())
 
 def draw_isometric_grid(screen):
-    if not map_grid:
+    if not map_grid or not SPRITE_PALETTE or not SPRITE_TILES:
         return
     for y in range(map_height):
         for x in range(map_width):
             tile = map_grid[y][x]
             sx = int(((x - y) * (TILE_WIDTH // 2) + screen.get_width() // 2) * zoom + (1-zoom)*screen.get_width()//2)
             sy = int(((x + y) * (TILE_HEIGHT // 2) + 50) * zoom + (1-zoom)*screen.get_height()//2)
-            points = [
-                (sx, sy + int(TILE_HEIGHT//2 * zoom)),
-                (sx + int(TILE_WIDTH//2 * zoom), sy),
-                (sx + int(TILE_WIDTH * zoom), sy + int(TILE_HEIGHT//2 * zoom)),
-                (sx + int(TILE_WIDTH//2 * zoom), sy + int(TILE_HEIGHT * zoom))
-            ]
-            color = FLOOR_COLOR if tile == 0 else WALL_COLOR if tile == 1 else EXIT_COLOR
-            pygame.draw.polygon(screen, color, points, 0)
-            pygame.draw.polygon(screen, (0,0,0), points, 1)
+            # Choose sprite by tile type
+            if tile == 0:
+                sprite = SPRITE_TILES["floor"]
+            elif tile == 1:
+                sprite = SPRITE_TILES["wall"]
+            elif tile == 2:
+                sprite = SPRITE_TILES["exit"]
+            elif tile == 3:
+                sprite = SPRITE_TILES.get("waypoint", SPRITE_TILES["exit"])
+            elif tile == 4:
+                sprite = SPRITE_TILES.get("event", SPRITE_TILES["floor"])
+            else:
+                sprite = SPRITE_TILES["floor"]
+            draw_sprite(screen, sprite, SPRITE_PALETTE, sx, sy)
 
 def draw_player(screen, pos):
     x, y, sx, sy = pos
@@ -199,7 +251,26 @@ def draw_player(screen, pos):
     offset_y = (sy - 1) * (TILE_HEIGHT // 6)
     sx_iso = int(((x - y) * (TILE_WIDTH // 2) + screen.get_width() // 2) * zoom + (1-zoom)*screen.get_width()//2 + TILE_WIDTH//2*zoom + offset_x)
     sy_iso = int(((x + y) * (TILE_HEIGHT // 2) + 50) * zoom + (1-zoom)*screen.get_height()//2 + TILE_HEIGHT//2*zoom + offset_y)
-    pygame.draw.circle(screen, PLAYER_COLOR, (sx_iso, sy_iso), int(12*zoom))
+    # Draw pixel art sprite for player
+    if SPRITE_PALETTE and SPRITE_CHARACTERS:
+        if player_class == "Brute":
+            sprite = SPRITE_CHARACTERS["brute"]
+            color_palette = SPRITE_PALETTE
+        elif player_class == "Scout":
+            sprite = SPRITE_CHARACTERS["scout"]
+            color_palette = SPRITE_PALETTE
+        elif player_class == "Savant":
+            sprite = SPRITE_CHARACTERS["savant"]
+            color_palette = SPRITE_PALETTE
+        elif player_class == "Vanguard":
+            sprite = SPRITE_CHARACTERS["vanguard"]
+            color_palette = SPRITE_PALETTE
+        else:
+            sprite = SPRITE_CHARACTERS["brute"]
+            color_palette = SPRITE_PALETTE
+        draw_sprite(screen, sprite, color_palette, sx_iso-16, sy_iso-16)
+    else:
+        pygame.draw.circle(screen, PLAYER_COLOR, (sx_iso, sy_iso), int(12*zoom))
 
 def draw_player_hp(screen, pos, hp, max_hp):
     x, y, sx, sy = pos
@@ -215,19 +286,28 @@ def draw_player_hp(screen, pos, hp, max_hp):
     pygame.draw.rect(screen, (0, 200, 0), (bar_x, bar_y, hp_w, 6))
 
 def draw_monsters(screen, monsters):
+    if not SPRITE_PALETTE or not SPRITE_MONSTERS:
+        return
     for m in monsters:
         x, y = m["pos"]
         sx = int(((x - y) * (TILE_WIDTH // 2) + screen.get_width() // 2) * zoom + (1-zoom)*screen.get_width()//2)
         sy = int(((x + y) * (TILE_HEIGHT // 2) + 50) * zoom + (1-zoom)*screen.get_height()//2)
-        color = (0,255,0) if m["type"]=="goblin" else (200,200,200) if m["type"]=="skeleton" else (0,255,255)
-        pygame.draw.rect(screen, color, (sx + int(TILE_WIDTH//4*zoom), sy + int(TILE_HEIGHT//4*zoom), int(TILE_WIDTH//2*zoom), int(TILE_HEIGHT//2*zoom)))
+        if m["type"] == "goblin":
+            sprite = SPRITE_MONSTERS["goblin"]
+        elif m["type"] == "skeleton":
+            sprite = SPRITE_MONSTERS["skeleton"]
+        elif m["type"] == "slime":
+            sprite = SPRITE_MONSTERS["slime"]
+        else:
+            sprite = SPRITE_MONSTERS["goblin"]
+        draw_sprite(screen, sprite, SPRITE_PALETTE, sx, sy)
         # Draw HP bar above monster
         if "hp" in m:
             max_hp = 10  # For now, hardcoded
             hp = max(0, min(m["hp"], max_hp))
             bar_w = int(TILE_WIDTH//2 * zoom)
-            bar_x = sx + int(TILE_WIDTH//4*zoom)
-            bar_y = sy + int(TILE_HEIGHT//4*zoom) - 10
+            bar_x = sx
+            bar_y = sy - 10
             hp_w = int(bar_w * (hp / max_hp))
             pygame.draw.rect(screen, (60, 0, 0), (bar_x, bar_y, bar_w, 5))
             pygame.draw.rect(screen, (255, 0, 0), (bar_x, bar_y, hp_w, 5))
@@ -241,6 +321,10 @@ def draw_floating_damage(screen):
         sx_iso = int(((x - y) * (TILE_WIDTH // 2) + screen.get_width() // 2) * zoom + (1-zoom)*screen.get_width()//2 + TILE_WIDTH//2*zoom + offset_x + dmg["dx"]*dmg["timer"]*20)
         sy_iso = int(((x + y) * (TILE_HEIGHT // 2) + 50) * zoom + (1-zoom)*screen.get_height()//2 + TILE_HEIGHT//2*zoom - int(dmg["timer"]*30))
         alpha = max(0, 255 - int(dmg["timer"]*180))
+        # Draw a colored pixel art tile as damage background
+        if SPRITE_TILES:
+            sprite = SPRITE_TILES.get("event", SPRITE_TILES["floor"])
+            draw_sprite(screen, sprite, SPRITE_PALETTE, sx_iso-8, sy_iso-8, scale=2)
         font = pygame.font.SysFont(None, 22, bold=True)
         text = font.render(str(dmg["value"]), True, (255, 64, 64))
         text.set_alpha(alpha)
@@ -258,6 +342,10 @@ def is_on_waypoint():
 
 def draw_ui(screen):
     font = pygame.font.SysFont(None, 24)
+    # Draw a pixel art panel background using wall or floor tile
+    if SPRITE_TILES:
+        for i in range(7):
+            draw_sprite(screen, SPRITE_TILES["wall"], SPRITE_PALETTE, 0, 10 + i*22, scale=4)
     lines = [
         f"Class: {player_class}",
         f"Level: {player_level}  XP: {player_xp}/100",
@@ -270,13 +358,19 @@ def draw_ui(screen):
         screen.blit(text, (10, 10 + i*22))
     # Show warp to city prompt if on waypoint
     if is_on_waypoint():
+        if SPRITE_TILES:
+            draw_sprite(screen, SPRITE_TILES["waypoint"], SPRITE_PALETTE, 10, 130, scale=4)
         text = font.render("[W] Warp to City", True, (255,255,0))
-        screen.blit(text, (10, 130))
+        screen.blit(text, (50, 130))
 
 def draw_party_panel(screen):
     font = pygame.font.SysFont("Courier", 18, bold=True)
+    # Draw pixel art panel background
+    if SPRITE_TILES:
+        for i in range(10):
+            for j in range(4):
+                draw_sprite(screen, SPRITE_TILES["wall"], SPRITE_PALETTE, 600 + i*16, 10 + j*16, scale=2)
     panel_rect = pygame.Rect(600, 10, 190, 180)
-    pygame.draw.rect(screen, (0,0,128), panel_rect)
     pygame.draw.rect(screen, (255,255,0), panel_rect, 2)
     y = 20
     screen.blit(font.render("Party Info", True, (255,255,0)), (610, y))
@@ -293,7 +387,8 @@ def draw_party_panel(screen):
         screen.blit(font.render(i[:8], True, (255,128,0)), (620, y))
         y += 18
     # Invite input box
-    pygame.draw.rect(screen, (0,0,0), (610, 160, 100, 20))
+    if SPRITE_TILES:
+        draw_sprite(screen, SPRITE_TILES["event"], SPRITE_PALETTE, 610, 160, scale=4)
     pygame.draw.rect(screen, (255,255,0), (610, 160, 100, 20), 1)
     screen.blit(font.render(invite_input, True, (255,255,255)), (614, 162))
     screen.blit(font.render("[I]nvite", True, (255,255,0)), (720, 160))
@@ -325,47 +420,48 @@ def draw_party_markers(screen, player_pos, party_positions, zoom):
             edge_y += math.sin(angle) * 5
         edge_x = max(margin, min(width-margin, edge_x))
         edge_y = max(margin, min(height-margin, edge_y))
-        points = [
-            (edge_x, edge_y),
-            (edge_x - 10*math.sin(angle), edge_y + 10*math.cos(angle)),
-            (edge_x + 10*math.sin(angle), edge_y - 10*math.cos(angle))
-        ]
-        pygame.draw.polygon(screen, (255,255,0), points)
+        # Draw a pixel art marker (use event or waypoint sprite)
+        if SPRITE_TILES:
+            marker_sprite = SPRITE_TILES.get("waypoint", SPRITE_TILES["exit"])
+            draw_sprite(screen, marker_sprite, SPRITE_PALETTE, int(edge_x)-8, int(edge_y)-8, scale=2)
         # Optionally, draw member id
         font = pygame.font.SysFont(None, 16)
         screen.blit(font.render(member["id"][:4], True, (255,255,0)), (edge_x+8, edge_y-8))
 
 def draw_emote(screen, sx, sy, emote_type, t):
-    # Simple placeholder: colored circle and label, animates up and down
+    # Use event or boss sprite as emote icon
+    if SPRITE_TILES:
+        if emote_type == "danger":
+            sprite = SPRITE_TILES.get("event", SPRITE_TILES["floor"])
+        elif emote_type == "ok":
+            sprite = SPRITE_TILES.get("waypoint", SPRITE_TILES["exit"])
+        elif emote_type == "thanks":
+            sprite = SPRITE_TILES.get("exit", SPRITE_TILES["floor"])
+        elif emote_type == "wait":
+            sprite = SPRITE_TILES.get("wall", SPRITE_TILES["floor"])
+        else:
+            sprite = SPRITE_TILES.get("floor", SPRITE_TILES["floor"])
+        offset = int(10 * math.sin(t * 6))
+        draw_sprite(screen, sprite, SPRITE_PALETTE, sx-8, sy-32+offset, scale=2)
+    # Draw label as before
     color = EMOTE_TYPES[emote_type]["color"]
     label = EMOTE_TYPES[emote_type]["label"]
-    offset = int(10 * math.sin(t * 6))
-    pygame.draw.circle(screen, color, (sx, sy - 32 + offset), 16)
     font = pygame.font.SysFont(None, 18, bold=True)
     text = font.render(label, True, color)
-    screen.blit(text, (sx - text.get_width() // 2, sy - 56 + offset))
-
-def draw_party_emotes(screen, player_pos, party_positions, party_emotes, zoom):
-    width, height = screen.get_size()
-    now = pygame.time.get_ticks() / 1000.0
-    px, py = player_pos
-    for member in party_positions:
-        mx, my = member["pos"]
-        mid = member["id"]
-        sx = int(((mx - my) * (TILE_WIDTH // 2) + width // 2) * zoom + (1-zoom)*width//2 + TILE_WIDTH//2*zoom)
-        sy = int(((mx + my) * (TILE_HEIGHT // 2) + 50) * zoom + (1-zoom)*height//2 + TILE_HEIGHT//2*zoom)
-        if mid in party_emotes:
-            emote = party_emotes[mid]
-            if emote["until"] > now:
-                t = now % 1.0
-                draw_emote(screen, sx, sy, emote["type"], t)
+    screen.blit(text, (sx - text.get_width() // 2, sy - 56 + int(10 * math.sin(t * 6))))
 
 def draw_city(screen):
-    screen.fill(CITY_BG_COLOR)
+    # Fill with pixel art floor tiles
+    if SPRITE_TILES:
+        for y in range(0, screen.get_height(), SPRITE_SIZE*SPRITE_SCALE):
+            for x in range(0, screen.get_width(), SPRITE_SIZE*SPRITE_SCALE):
+                draw_sprite(screen, SPRITE_TILES["floor"], SPRITE_PALETTE, x, y, scale=SPRITE_SCALE)
+    else:
+        screen.fill(CITY_BG_COLOR)
     font = pygame.font.SysFont(None, 36, bold=True)
     label = font.render("Main City: Imperial Americanopolis", True, CITY_LABEL_COLOR)
     screen.blit(label, (screen.get_width()//2 - label.get_width()//2, 40))
-    # Draw city features (placeholder)
+    # Draw city features (pixel art panels)
     font2 = pygame.font.SysFont(None, 28)
     features = [
         "[S]hop: Gear Up",
@@ -374,11 +470,19 @@ def draw_city(screen):
         "Vendors, Crafting, Socialize..."
     ]
     for i, f in enumerate(features):
+        if SPRITE_TILES:
+            draw_sprite(screen, SPRITE_TILES["event"], SPRITE_PALETTE, screen.get_width()//2 - 80, 120 + i*36, scale=4)
         text = font2.render(f, True, CITY_UI_COLOR)
-        screen.blit(text, (screen.get_width()//2 - text.get_width()//2, 120 + i*36))
-    # Draw city map (placeholder rectangles)
-    pygame.draw.rect(screen, (120, 120, 180), (180, 300, 440, 180))
-    pygame.draw.rect(screen, (255, 255, 0), (180, 300, 440, 180), 3)
+        screen.blit(text, (screen.get_width()//2 - text.get_width()//2 + 40, 120 + i*36))
+    # Draw city map (placeholder rectangles with pixel art)
+    if SPRITE_TILES:
+        for y in range(12):
+            for x in range(28):
+                draw_sprite(screen, SPRITE_TILES["wall"], SPRITE_PALETTE, 180 + x*8, 300 + y*8, scale=1)
+        pygame.draw.rect(screen, (255, 255, 0), (180, 300, 440, 180), 3)
+    else:
+        pygame.draw.rect(screen, (120, 120, 180), (180, 300, 440, 180))
+        pygame.draw.rect(screen, (255, 255, 0), (180, 300, 440, 180), 3)
     font3 = pygame.font.SysFont(None, 24)
     screen.blit(font3.render("Rest Area", True, (255,255,255)), (200, 320))
     screen.blit(font3.render("Gear Shop", True, (255,255,255)), (500, 320))
@@ -420,6 +524,7 @@ def find_path(grid, start, goal):
 
 def main():
     pygame.init()
+    load_sprites()
     screen = pygame.display.set_mode((800, 600))
     pygame.display.set_caption("Isometric Roguelike Client")
     clock = pygame.time.Clock()
