@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 # Entry point for the Python client
 # Uses pygame for isometric rendering and websockets for networking
 import asyncio

@@ -1,3 +1,7 @@
+import sys
+import os
+sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
+
 # Entry point for the Python server
 # Uses websockets for multiplayer
 import asyncio
@@ -44,8 +48,9 @@ def get_party_id(act, zone, endgame_depth=None):
     return f"act{act}_zone{zone}"
 
 # Load campaign map for chapter 1 (index 0)
-campaign_chapter = 0
-campaign_map_data = get_campaign_map(campaign_chapter)
+campaign_chapter = 1
+campaign_zone = 1
+campaign_map_data = get_campaign_map(campaign_chapter, campaign_zone)
 if campaign_map_data:
     GAME_MAP = GameMap(campaign_map_data["width"], campaign_map_data["height"])
     GAME_MAP.grid = campaign_map_data["grid"]
