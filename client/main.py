@@ -7,13 +7,17 @@ import pygame
 from core.sprites import load_sprites
 from core.network import network_loop
 from core.pathfinding import find_path
-from core.game import draw_game
+from core.game import draw_game, draw_main_menu, draw_character_select
+from core.input import handle_input, handle_main_menu_input, handle_character_select_input
+from core.update import update_game
 
 async def main():
     # --- State and asset setup ---
     state = {
+        'scene': 'main_menu',
         'player_pos': [5, 5, 1, 1],
         'player_class': None,
+        'selected_class': None,
         'map_grid': [],
         'map_width': 0,
         'map_height': 0,
@@ -46,12 +50,22 @@ async def main():
     running = True
     while running:
         for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                running = False
-            # ...handle input, update state, send network messages...
-        # ...handle pathfinding, auto-attack, etc...
-        screen.fill((30, 30, 30))
-        draw_game(screen, state, assets)
+            if state['scene'] == 'main_menu':
+                running = handle_main_menu_input(event, state)
+            elif state['scene'] == 'character_select':
+                running = handle_character_select_input(event, state, send_queue)
+            elif state['scene'] == 'game':
+                running = handle_input(event, state, send_queue)
+            if not running:
+                break
+        if state['scene'] == 'main_menu':
+            draw_main_menu(screen)
+        elif state['scene'] == 'character_select':
+            draw_character_select(screen, state.get('selected_class'))
+        elif state['scene'] == 'game':
+            update_game(state, send_queue)
+            screen.fill((30, 30, 30))
+            draw_game(screen, state, assets)
         pygame.display.flip()
         clock.tick(30)
     pygame.quit()

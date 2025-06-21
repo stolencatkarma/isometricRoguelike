@@ -26,6 +26,8 @@ def draw_isometric_grid(screen, map_grid, map_height, map_width, SPRITE_PALETTE,
             draw_sprite(screen, sprite, SPRITE_PALETTE, sx, sy, 4)
 
 def draw_player(screen, pos, player_class, SPRITE_PALETTE, SPRITE_CHARACTERS, TILE_WIDTH, TILE_HEIGHT, zoom):
+    if not player_class:
+        return  # Don't draw if class is not set
     x, y, sx, sy = pos
     offset_x = (sx - 1) * (TILE_WIDTH // 6)
     offset_y = (sy - 1) * (TILE_HEIGHT // 6)
